@@ -1,0 +1,498 @@
+---
+title: "Carbo Loading - Product Sales Analysis"
+author:
+- name: Gopalakrishnan Kalarikovilagam Subramanian
+- name: Vaidiyanathan Lalgudi Venkatesan
+date: "December 9, 2018"
+output: 
+  prettydoc::html_pretty:
+    theme: architect
+---
+
+## Introduction
+
+We all have come across Ads in weekly mailer; Starting from a new iPhone launch,
+to a price slash of a household product. It is obvious that advertising
+helps to reach out to people. Does this mean an increase in the product sales?
+Also, if featuring in weekly mailer helps increase sales, does the location
+of feature in the mailer impact sales too? **Let's analyse!!!**
+
+We intend to analyse the trend in sales in different brands of various 
+commodities over time. The data set contains household level transactions over a
+period of two years from four categories: Pasta, Pasta Sauce, Syrup, and Pancake
+Mix. We are planning to study how the and feature location in a weekly mailer
+affects the sales of a particular commodity.
+
+***Key variables used***:
+
+* upc - unique product code
+
+* brand
+
+* commodity
+
+* week
+
+* feature_desc
+
+* display_desc
+
+* dollar_sales
+
+* geography
+
+* store
+
+We plan to approch the problem by first plotting the weekly sales of different
+brands for each commodity, to get insights on the impact of feature description
+of the product in weekly mailer. The analysis is intended to help each brand
+get an opinion on their product sales based on its location in a weekly mailer. 
+
+
+## Packages Required
+
+The following packages are being used for our analysis:
+
+```{r message = FALSE}
+#pretty doc to have a nice html output for the rmd
+library(prettydoc)
+#haven to import SAS data
+library(haven) 
+#Reshape to flexibly restructure and aggregate data
+library(reshape)
+#tidyverse is a collection of various packages as described below:
+#dplyr: to manipulate and join data
+#ggplot2: to visualize data
+#tidyr: to tidy data
+#stringr: string manipulation
+library(tidyverse)
+#add-on to ggplot for making plots
+library(cowplot)
+#to create interactive plots
+library(plotly)
+#Extra themes for plots
+library(ggthemes)
+#Plot interactive tables
+library(DT)
+```
+
+### Data Collection
+We have used the Carbo-Loading dataset: A relational database provided by 84.51??
+containing household level transactions of various commodities over a period of 
+two years.
+
+The dataset can be downloaded here: [Carbo Loading Dataset](https://www.dropbox.com/sh/4v0mil9vls50101/AAC07lB8lhC6Auh0m0I070Eya?dl
+=0)
+
+The original dataset consists of 4 data tables in sas format. The following code
+is used to import the dataset in r, after placing them in the working directory:
+
+```{r message = FALSE, results='hide', eval = TRUE}
+#import sas data
+
+file_path <- "data/"
+file_extension <- ".sas7bdat"
+
+files_name <- c("product_lookup", "store_lookup",
+                "transactions", "causal_lookup")
+for (i in seq_along(files_name)) {
+  file_name <- paste0(file_path,files_name[i], file_extension)
+  if ( file.exists(file_name) ) {
+    file <- read_sas(file_name)
+    assign(paste0("df_", files_name[i]) , file)
+  } else {
+    print("file doesn't exist")
+  }
+} 
+```
+
+The tables are linked as shown below:
+
+<img style="float: middle;" src="images/dataset.png" width=750x>
+
+The varaibles used are described below:
+
+```{r echo=FALSE, message=FALSE}
+variables <- c("upc", "dollar_sales", "week", "commodity", "band",
+               "feature_desc")
+description <- c("Standard 10-digit Unique Product Code",
+                 "Amount of dollars spent by the customers",
+                  "Expresses week of the transaction. Possible values are 
+                 1 through 104",
+                 "Specifies 1 of 4 categories: Pasta, Pasta Sauce, Pancake mix
+                 or Syrup",
+                 "Specifies brand of item",
+                 "Describes location of product on weekly mailer")
+variable_name <- "Variable"
+description_name <- "Description"
+variable_table <- melt(data.frame(variables,description))
+colnames(variable_table) <- c(variable_name, description_name)
+```
+
+```{r echo=FALSE}
+datatable(variable_table, caption = 'Variables used')
+```
+
+
+### Data Cleaning
+
+```{r echo=FALSE}
+upc <- df_product_lookup$upc
+dollar_sales <- df_transactions$dollar_sales
+```
+After data collection, we need to tidy the data before exploring the same to get
+insights. This involved padding of zeros to the `upc` variable, keeping only
+positive `dollar_sales` values across all data sets. Then the tables are joined
+using dplyr to form a single dataset. 
+
+The code for data preparation is as below:
+
+```{r}
+
+#padding leading zeros to UPC to make it 10 digit
+df_product_lookup$upc <- str_pad(df_product_lookup$upc, 10, pad = "0")
+df_causal_lookup$upc <- str_pad(df_causal_lookup$upc, 10, pad = "0")
+df_transactions$upc <- str_pad(df_transactions$upc, 10, pad = "0")
+
+#keeping only positive dollar_sales values
+df_transactions <- df_transactions[df_transactions$dollar_sales > 0,]
+
+cleaned_data <- df_causal_lookup %>%
+                inner_join(df_transactions, by = c("week", "upc", "store")) %>%
+                left_join(df_product_lookup, by = "upc") %>%
+                select(upc, dollar_sales, week, commodity, brand, feature_desc
+                       , display_desc, store, geography.x)
+
+```
+
+
+```{r echo=FALSE}
+library(DT)
+datatable(head(cleaned_data, 100), caption = 'Clean Data')
+```
+
+
+The clean data has the following statistics:
+
+ * We have the feature description for only weeks `r min(cleaned_data$week)` to
+ `r max(cleaned_data$week)`
+ 
+ * There are a total of `r n_distinct(cleaned_data$upc)` distinct upc, with
+ `r n_distinct(cleaned_data$brand)` brands across 
+ `r n_distinct(cleaned_data$commodity)` commodities.
+ Each commodity has the following number of distinct brands:
+```{r echo=FALSE, message=FALSE}
+cleaned_data %>%
+  group_by(commodity) %>%
+  summarise(Number_of_brands = n_distinct(brand)) %>%
+  datatable(caption = "Distinct brands for each commodity")
+```
+
+
+## Exploratory Data Analysis
+
+### Product sales analysis over time 
+
+We want to see how the sales of different brands are improved by the
+weekly mailer promoting the brands and if the location of the product promotion
+in the store impacts sales. Before that, lets see how the net sales of each
+product over the course of 2 years.
+
+```{r, message=FALSE}
+
+#Interactive plot of product sales vs time
+sales_time_plot <- cleaned_data %>% 
+  group_by(commodity, week) %>% 
+  arrange(week) %>% 
+  summarise(sum_sales = sum(dollar_sales)) %>% 
+  filter(sum_sales < 7500) %>% 
+  ggplot(aes(x = week, y = sum_sales, color = commodity)) +
+  geom_smooth(se = FALSE) +
+  theme_stata() +
+  ggtitle("Net Sales for each commodity") +
+  xlab("Week") + ylab("Net Sales")
+
+ggplotly(sales_time_plot)
+
+```
+
+We can observe that while pasta has sold well for the first year, the sales in
+pasta has seen a great dip, to almost zero during the second year. Also, the
+sales of syrups had seen an increase towards the end of first year, then 
+following a similar dip in sales as pasta. Pasta sauce, on the other hand 
+follows the exact opposite trend of syrups, as it decreases and then
+the final sales increases. Pancake mixes are seen to be sold fairly well duing
+the second year.
+
+### Sales vs Geographic locations
+
+Next, we see how the geographic location of stores affect the net sales of the 
+products. From the below plot, it can be seent that the sales in location 2 
+is on average high comapared to the sales of products in location 1.
+
+```{r, message=FALSE}
+
+#Plot to analyze sales accross difference stores and geographic locations
+cleaned_data$geography.x <- as.factor(cleaned_data$geography.x)
+cleaned_data %>%  
+  group_by(store, geography.x ) %>% 
+  summarise(sum_sales  = sum(dollar_sales)) %>% 
+  ggplot(aes(x = store, y = sum_sales, color = geography.x)) +
+  geom_point() +
+  geom_smooth(se = FALSE) +
+  ggtitle("Net Sales for each store and store location") +
+  xlab("Store") + ylab("Net Sales")
+
+```
+
+### Impact of Display Description
+
+Lets analyse how the in-store display of a product impacts its sales.
+The following table briefs the unique number of places where each commodity and
+brand has been placed in the stores over thet course of 2 years.
+
+```{r, message=FALSE}
+
+#Table showing number of display desc for each brand of a product
+cleaned_data %>% 
+  group_by(commodity, brand) %>% 
+  summarise(Number_of_Display_desc = length(unique(display_desc))) %>%
+  datatable(caption = "Number of display locations for each product")
+
+#Plot to show the average sales vs display description
+cleaned_data  %>%
+  group_by(display_desc) %>%
+  summarise( average_sales = mean(dollar_sales)) %>%
+  arrange(desc(average_sales)) %>% 
+  ggplot(aes(x = display_desc, y = average_sales, fill = display_desc)) +
+  geom_bar(stat = "identity",position = "dodge") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  xlab("Display Description") +
+  ylab("Average Sales in Dollars") +
+  ggtitle("Average sales vs Disply description")
+```
+
+The plot shows the average sales with respect to display description for all the
+commodities. It is seen from the plot that Side-Aisle End Cap, Secondary 
+Location Display and In-Aisle Display tend to increase the sale of a product 
+compared to not display it. However, we would like to see if the same trend is
+followed for each commodity. Hence, we move forward to analyse the impact of 
+in-store display on the average sales of each commodity, as shown below:
+
+```{r echo=FALSE, message=FALSE}
+
+# Sales of each product at different Store Display Location
+commodity_name <- c("pasta sauce", "syrups", "pasta", "pancake mixes")
+Plots <- list()
+for (i in seq_along(commodity_name)) {
+  Plots[[i]] <- cleaned_data %>%
+    filter(commodity == commodity_name[i]) %>%
+    group_by(display_desc) %>%
+    summarise(average_sales = mean(dollar_sales)) %>%
+    arrange(desc(average_sales)) %>% 
+    ggplot(aes(x = display_desc, y = average_sales, fill = display_desc)) +
+    geom_bar(stat = "identity",position = "dodge", show.legend = FALSE) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    xlab("Display Description") +
+    ylab("Avg Sales($)") +
+    ggtitle(paste(commodity_name[i])) +
+    scale_x_discrete(labels = abbreviate)
+}
+p <- plot_grid(Plots[[1]], Plots[[2]], Plots[[3]], Plots[[4]])  
+title <- ggdraw() + draw_label("Average sales vs Store display location"
+                               , fontface = 'bold')
+plot_grid(title, p, ncol = 1, rel_heights = c(0.1, 1))
+```
+
+Pasta Sauce has seen highest average sales when placed on Secondary
+location display(ScLD), In-shelf and In-Aisle. On the other hand, Pasta has sold
+well while displayed in the Side-ailse end cap (S-EC), store front and In-Aisle 
+end cap. Also, pancake mixes have high sale when placed in the Mid-Aisle end cap
+(M-EC) and  In-Asile display. However,it can be observed that the location
+doesn't impact the sales of syrups since they surprisingly show high average
+sales when Not on display (NtoD). This leads us to understand that each commodity
+has different hot spots of display to boost sales.
+
+
+```{r, message=FALSE}
+
+#Sales of the brand Private Label in each store location for all products
+
+for (i in seq_along(commodity_name)) {
+  Plots[[i]] <- cleaned_data %>%
+    filter(commodity == commodity_name[i], brand == "Private Label") %>%
+    group_by(display_desc) %>%
+    summarise(average_sales = mean(dollar_sales)) %>%
+    arrange(desc(average_sales)) %>% 
+    ggplot(aes(x = display_desc, y = average_sales, fill = display_desc)) +
+    geom_bar(stat = "identity",position = "dodge", show.legend = FALSE) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    xlab("Display Description") +
+    ylab("Avg Sales($)") +
+    ggtitle(paste(commodity_name[i])) +
+    scale_x_discrete(labels = abbreviate)
+}
+p <- plot_grid(Plots[[1]], Plots[[2]], Plots[[3]], Plots[[4]])  
+title <- ggdraw() + draw_label(paste("Private label sales vs Display Desc")
+                               , fontface = 'bold')
+plot_grid(title, p, ncol = 1, rel_heights = c(0.1, 1))
+
+```
+
+
+The plot of average sales versus display description of brand 'Private Label' for
+syrup commodity shows that the rear end cap, secondary location display and side
+aisle end cap result in increase in sales of syrups for this brand than when
+there was no display. This is contradictory to what was seen in the commodity
+plot. We feel that the brand plot gives a more clearer picture than the 
+commodity plot due to the reasons given above. For pasta sause the Side-Aisle
+End Cap, Mid-Aisle End Cap and In-Aisle of product placements help in
+improvement of sales.Comparing with the commodity plot side-aisle end cap and 
+In-Aisle is seen as the choices. For Pancake mixes Mid-Aisle End Cap, Side-Aisle
+End Cap and Secondary Location Display improves the sales for the product.
+Comparing with the commodity plot Mid-Aisle End Cap is chosen as the location 
+of display. In case of Private label pasta brand the Store-Front, Side-Aisle End
+Cap helps in improvement of sales. Therefore, store front and side-aisle end
+cap are chosen as possible locations for pasta commodity.
+
+### Impact of Feature description
+
+In the next section we want to compare whether the location of the brand of a 
+commodity in the weekly mailer has an impact on the sale of the product. The 
+locations in the weekly mailer are divided as back page feature, front page
+feature, interior page feature, interior page line item, not on feature, wrap
+back feature, wrap front feature, wrap interior feature. A plot of average sales
+as a function of feature descrption is given below.
+
+```{r, message=FALSE}
+
+#Table showing number of feature desc for each brand of a product
+cleaned_data %>% 
+  group_by(commodity, brand) %>% 
+  summarise(Number_of_Feature_desc = length(unique(feature_desc))) %>%
+  datatable(caption = "Number of feature locations for each product")
+
+# Overall Sales as a function of feature description
+cleaned_data  %>%
+  group_by(feature_desc) %>%
+  summarise( average_sales = mean(dollar_sales)) %>%
+  arrange(desc(average_sales)) %>% 
+  ggplot(aes(x = feature_desc, y = average_sales, fill = feature_desc)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  xlab("Feature Description") +
+  ylab("Average Sales in Dollars") +
+  ggtitle("Average sales vs Feature description")
+```
+
+The interior page line item, wrap back feature and interior page feature results
+in an improvement of sales. We want to analyse the commodity wise pattern and 
+then a brand wise pattern of all the commodities.
+
+```{r, message=FALSE}
+
+# Sales of each product as a function of feature desc
+
+for (i in seq_along(commodity_name)) {
+  Plots[[i]] <- cleaned_data %>%
+    filter(commodity == commodity_name[i]) %>%
+    group_by(feature_desc) %>%
+    summarise(average_sales = mean(dollar_sales)) %>%
+    arrange(desc(average_sales)) %>% 
+    ggplot(aes(x = feature_desc, y = average_sales, fill = feature_desc)) +
+    geom_bar(stat = "identity",position = "dodge", show.legend = FALSE) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    xlab("Display Description") +
+    ylab("Avg Sales($)") +
+    ggtitle(paste(commodity_name[i])) +
+    scale_x_discrete(labels = abbreviate)
+}
+p <- plot_grid(Plots[[1]], Plots[[2]], Plots[[3]], Plots[[4]])  
+title <- ggdraw() + draw_label("Average sales vs Location of feature in Mailer"
+                               , fontface = 'bold')
+plot_grid(title, p, ncol = 1, rel_heights = c(0.1, 1))
+
+```
+
+ For pasta commodity wrap front feature, wrap back feature and back page feature 
+helps improve sales. For pancake mixes we have only four feature descriptions.
+Wrap front feature helps in marginal improvement of sales. Pasta sause has all
+the feature descriptions. Interior page feature has an improvement on the sales 
+for this commodity. For the syrup commodity, a wrap back feature, interior page
+line item and front page feature improves sales. However, as discussed for the
+display description many brands in the commodity will not have a feature and the
+sales plot may be affected or skewed by this. Thereofore, we are choosing a brand
+(Private Label) which has  a good spread of all the feature descriptions for all
+the commodities.
+
+```{r, message=FALSE}
+
+#Sales of the brand Private Label as a function of feature desc
+
+for (i in seq_along(commodity_name)) {
+  Plots[[i]] <- cleaned_data %>%
+    filter(commodity == commodity_name[i],brand == "Private Label") %>%
+    group_by(feature_desc) %>%
+    summarise(average_sales = mean(dollar_sales)) %>%
+    arrange(desc(average_sales)) %>% 
+    ggplot(aes(x = feature_desc, y = average_sales, fill = feature_desc)) +
+    geom_bar(stat = "identity",position = "dodge", show.legend = FALSE) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    xlab("Display Description") +
+    ylab("Avg Sales($)") +
+    ggtitle(paste(commodity_name[i])) +
+    scale_x_discrete(labels = abbreviate)
+}
+p <- plot_grid(Plots[[1]], Plots[[2]], Plots[[3]], Plots[[4]])  
+title <- ggdraw() + draw_label("Private label sales vs Weekly mailer feature"
+                               , fontface = 'bold')
+plot_grid(title, p, ncol = 1, rel_heights = c(0.1, 1))
+```
+
+The sales of Private Label Pasta has improved most due to the wrap front feature
+,wrap back and wrap interior feature in the weekly mailer. Hence, wrap front 
+feature is good spot for this product. Wrap front feature is again helping
+improve sales for  Private Label pancake mixes, followed by back page feature.
+The back page feature is seen improving sales of pasta sause. None of the
+feature descriptions is improving the sale for syrup. Might be the syrup users 
+dont read the weekly mailer. One important observation is the interior page
+feature is not helping improve sales for any of the commodities and can be
+avoided.
+
+## Summary
+
+The average sales of a commodity as a function of display and feature
+description was analysed. The display description is the location of display of 
+the product in the store.The feature description is the location of featuring of 
+the product in the weekly mailer. The steps carried out and 
+insights obtained are summarized below:
+
+*  An initial plot of average sales as a function of display locations and 
+feature description is made. 
+
+*  A plot of average sales of the four commodities pasta, pasta sauce, 
+pancake mixes and syrup versus display locations is made. An intial prediction
+is made from these plots.
+
+*  A more general conclusion is made by taking a brand 'Private Label' which 
+manufactures all four commodities and is a common brand in all products, and 
+also featuring in many in-store locations and magazine feature.
+
+*  It is found that the rear end cap is the best location to display syrup. 
+Side-aisle End Cap and In-Aisle are good locations to display pasta sause.
+Mid-Aisle End Cap is a good location to display pancakes. Store front and 
+side-aisle are chosen for pasta.
+
+*  Wrap front feature is helping improve sales of pancake mixes and pasta.The 
+back page feature is improving sales of pasta sause. The interior feature 
+description is not helping improve sales. 
+
+The customer should place the product in the store location mentioned above and 
+use the weekly mailer wisely by using the above mentioned feature locations for
+different commodities to improve sales. 
+
+The limitations are many. The analysis is not exhaustive as only one brand from 
+each commodity was used for the analysis. More brands for each commodity can be 
+analysed and averaged to get a better picture. Effects of days of a week on 
+sales can also be analysed.
+
