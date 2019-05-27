@@ -1,0 +1,2 @@
+# Carbo_Loading_Project
+In this project we are utilising a two year sales data sets of multiple brands of four commodities . We are trying to come up with a relationship of location of feature description of brands in weekly mailers influence on the customer purchase preference. Another dimension of study is the dependency of the product display location in a store on the sale of the product. These insights will help in bettering sales in the future based on a calibrated approach.
